@@ -1,0 +1,35 @@
+{
+  "name": "@benqyoung/flutter-code-review",
+  "version": "1.0.0",
+  "description": "Flutter 项目自动代码检测系统，支持 Claude Code 和 Cursor。覆盖架构、Lint、安全、测试、无障碍、i18n 等多维度检查。",
+  "main": "index.js",
+  "keywords": [
+    "flutter",
+    "dart",
+    "code-review",
+    "claude-code",
+    "cursor",
+    "lint",
+    "static-analysis"
+  ],
+  "author": "BenQYoung",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BenQYoung/flutter-code-review.git"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "files": [
+    "agents/",
+    "plugin/",
+    "hooks/",
+    "skills/",
+    "README.md"
+  ],
+  "scripts": {
+    "install-claude": "bash scripts/install-claude.sh",
+    "install-cursor": "bash scripts/install-cursor.sh"
+  }
+}
