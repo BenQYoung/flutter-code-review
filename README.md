@@ -62,33 +62,28 @@
 
 ### 前置要求
 
-- [Claude Code](https://claude.ai/claude-code) CLI 已安装
 - Flutter SDK 已安装并在 PATH 中
-- `jq` 已安装（`brew install jq`）
+- [Claude Code](https://claude.ai/claude-code) 或 [Cursor](https://cursor.sh)（至少一个）
 
-### 安装
+### 克隆仓库
 
 ```bash
-# 1. 克隆仓库
-git clone https://github.com/yourname/flutter-code-review.git
+git clone https://github.com/BenQYoung/flutter-code-review.git
 cd flutter-code-review
-
-# 2. 创建 reports 目录
 mkdir -p reports
-
-# 3. 部署 Agents（软链到 Claude Code agents 目录）
-mkdir -p ~/.claude/agents
-ln -sf "$(pwd)/agents/flutter-review-orchestrator.md" ~/.claude/agents/
-ln -sf "$(pwd)/agents/flutter-arch-reviewer.md"       ~/.claude/agents/
-ln -sf "$(pwd)/agents/flutter-lint-reviewer.md"       ~/.claude/agents/
-ln -sf "$(pwd)/agents/flutter-test-reviewer.md"       ~/.claude/agents/
-ln -sf "$(pwd)/agents/flutter-security-reviewer.md"   ~/.claude/agents/
-
-# 4. 注册本地插件（/flutter-review slash command）
-# 编辑 ~/.claude/settings.json，添加以下内容：
 ```
 
-在 `~/.claude/settings.json` 的对应字段中合并以下配置：
+---
+
+## Claude Code 安装
+
+```bash
+bash scripts/install-claude.sh
+```
+
+脚本会自动将所有 Agent 软链到 `~/.claude/agents/`。
+
+完成后在 `~/.claude/settings.json` 的对应字段中合并以下配置，注册 `/flutter-review` 命令：
 
 ```json
 {
@@ -106,7 +101,7 @@ ln -sf "$(pwd)/agents/flutter-security-reviewer.md"   ~/.claude/agents/
 }
 ```
 
-> 将 `/path/to/flutter-code-review` 替换为实际克隆路径。
+> 将 `/path/to/flutter-code-review` 替换为实际克隆路径，然后重启 Claude Code。
 
 ### 配置目标项目路径
 
@@ -117,25 +112,15 @@ ln -sf "$(pwd)/agents/flutter-security-reviewer.md"   ~/.claude/agents/
 报告输出路径：`/path/to/flutter-code-review/reports/`
 ```
 
-### 重启 Claude Code
-
-配置完成后重启 Claude Code，等待插件加载完毕。
-
 ---
 
 ## Cursor 安装
 
-### 前置要求
-
-- [Cursor](https://cursor.sh) 已安装
-- Flutter SDK 已安装并在 PATH 中
-
-### 注册技能（软链）
-
 ```bash
-mkdir -p ~/.cursor/skills
-ln -sf "$(pwd)/plugin/skills/flutter-review-cursor" ~/.cursor/skills/flutter-review
+bash scripts/install-cursor.sh
 ```
+
+脚本会自动将技能软链到 `~/.cursor/skills/flutter-review`，重启 Cursor 后即可使用 `/flutter-review`。
 
 重启 Cursor 后，在 Chat 中即可使用 `/flutter-review` 命令。
 
