@@ -1,0 +1,9 @@
+{
+  "name": "flutter-review",
+  "description": "Flutter 项目自动代码检测与 Review 系统",
+  "version": "1.0.0",
+  "author": {
+    "name": "mac"
+  },
+  "license": "MIT"
+}

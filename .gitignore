@@ -1,0 +1,5 @@
+# 报告输出（不上传到 GitHub）
+reports/
+
+# Claude Code 本地配置
+.claude/settings.local.json
