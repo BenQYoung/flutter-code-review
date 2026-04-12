@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "hooks": {
+    "afterFileEdit": [
+      {
+        "command": "bash -c 'echo $CURSOR_FILE_PATH | grep -q \\.dart$ && echo \"[Flutter Review] .dart 已修改，建议运行 /flutter-review\" || true'",
+        "description": "dart 文件修改后提醒运行 flutter-review"
+      }
+    ]
+  }
+}

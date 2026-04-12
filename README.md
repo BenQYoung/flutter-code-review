@@ -123,6 +123,32 @@ ln -sf "$(pwd)/agents/flutter-security-reviewer.md"   ~/.claude/agents/
 
 ---
 
+## Cursor 安装
+
+### 前置要求
+
+- [Cursor](https://cursor.sh) 已安装
+- Flutter SDK 已安装并在 PATH 中
+
+### 注册技能（软链）
+
+```bash
+mkdir -p ~/.cursor/skills
+ln -sf "$(pwd)/plugin/skills/flutter-review-cursor" ~/.cursor/skills/flutter-review
+```
+
+重启 Cursor 后，在 Chat 中即可使用 `/flutter-review` 命令。
+
+### 说明
+
+Cursor 版与 Claude Code 版功能一致，区别在于：
+- Cursor 版所有检测逻辑**内联执行**（不依赖 Agent 工具）
+- `--all --fast` 模式完全相同：纯命令行驱动，零额外 token 消耗
+- Medium/Deep 模式为**顺序执行**（Claude Code 版为 4 个 Agent 并行）
+- 检查规则与 `agents/*.md` 保持同步，不维护两套规则
+
+---
+
 ## 使用方法
 
 在 Claude Code 对话框中输入以下命令：
@@ -214,18 +240,23 @@ ln -sf "$(pwd)/agents/flutter-security-reviewer.md"   ~/.claude/agents/
 ```
 flutter-code-review/
 ├── agents/
-│   ├── flutter-review-orchestrator.md   # 编排器（主入口）
+│   ├── flutter-review-orchestrator.md   # 编排器（主入口，Claude Code）
 │   ├── flutter-arch-reviewer.md         # 架构合规检测
 │   ├── flutter-lint-reviewer.md         # Dart/Flutter 规范检测
 │   ├── flutter-test-reviewer.md         # 测试覆盖与执行
 │   └── flutter-security-reviewer.md    # 安全检测
 ├── plugin/
 │   ├── .claude-plugin/
-│   │   ├── plugin.json                  # 插件元数据
+│   │   ├── plugin.json                  # Claude Code 插件元数据
 │   │   └── marketplace.json             # 本地 marketplace 配置
+│   ├── .cursor-plugin/
+│   │   ├── plugin.json                  # Cursor 插件元数据
+│   │   └── hooks-cursor.json            # Cursor hooks 配置
 │   └── skills/
-│       └── flutter-review/
-│           └── SKILL.md                 # /flutter-review slash command
+│       ├── flutter-review/
+│       │   └── SKILL.md                 # Claude Code 版 skill
+│       └── flutter-review-cursor/
+│           └── SKILL.md                 # Cursor 版 skill（内联执行）
 ├── skills/
 │   └── flutter-review.md               # skill 源文件
 ├── hooks/
