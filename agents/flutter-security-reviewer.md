@@ -6,7 +6,16 @@ tools: Read, Grep, Glob
 
 # Flutter Security Reviewer
 
-接收变更 `.dart` 文件列表和项目根路径，检查以下安全规范。
+接收以下参数（由 orchestrator 传入）：
+- `changed_files`：变更 `.dart` 文件列表和项目根路径
+- `diff_patch_path`：变更 diff patch 路径（`/tmp/review_diff.patch`）
+- `project_conventions`：项目 CLAUDE.md 内容（如有）
+
+**只报告置信度 ≥ 80% 的问题。相同类型问题合并汇报，不逐条列举。**
+
+**变更行过滤规则（diff_patch_path 存在时）：**
+- CRITICAL/HIGH 问题（S1、S2、S3、S5、S6、S7、S9、S10、S13、S14）：全文件扫描，所有匹配均报告
+- MEDIUM/LOW 问题（S4、S8、S11、S12）：仅报告出现在 diff patch 变更行内的问题
 
 参考项目存储方案：
 - 敏感数据（token、userId、密码）→ `flutter_secure_storage`
@@ -141,9 +150,56 @@ grep -rn "local_auth\|BiometricPrompt" lib/ pubspec.yaml --include="*.dart"
 AndroidManifest 中 Activity/Service/BroadcastReceiver 设置了 `exported=true` 但无 `permission` 保护。
 （检测：提示检查 `android/app/src/main/AndroidManifest.xml`，此处仅做提醒。）
 
+### S13. 弱加密算法 [CRITICAL]
+
+使用不安全的加密算法处理敏感数据，是最高频安全漏洞类型之一。
+
+检测模式：
+```bash
+# XOR 加密（^ 运算符用于加密字符串/字节）
+grep -rn "\^" lib/ --include="*.dart" | grep -i "encrypt\|cipher\|encode\|secret\|password\|key"
+
+# MD5/SHA1 用于密码哈希（不应用于密码，只能用于校验和）
+grep -rn "md5\|sha1\b\|sha128\|MD5\|SHA1\b" lib/ --include="*.dart" | \
+  grep -i "password\|secret\|hash\|crypt\|auth" | grep -v "//\|test"
+
+# DES 算法
+grep -rn "DES\b\|TripleDES\|3DES" lib/ --include="*.dart" | grep -v "//\|test"
+
+# ECB 模式（无 IV，分组密码最不安全的模式）
+grep -rn "ecbMode\|ECB\b\|pkcs7\b" lib/ --include="*.dart" | \
+  grep -i "encrypt\|cipher\|mode" | grep -v "//\|test"
+```
+
+修复建议：
+- 密码哈希 → `argon2` 或 `bcrypt`（dart 包：`argon2_flutter`、`cryptography`）
+- 对称加密 → AES-GCM（`cryptography` 包的 `AesGcm.with256bits()`）
+- XOR 加密 → 禁止用于安全场景，替换为标准加密库
+
+### S14. 不安全随机数 [HIGH]
+
+`math.Random()` 使用可预测的伪随机算法，不适合安全场景（token 生成、nonce、盐值）。
+
+检测模式：
+```bash
+# math.Random() 用于生成 token/nonce/salt/key
+grep -rn "Random()" lib/ --include="*.dart" | \
+  grep -v "Random\.secure\|//\|test\|mock" | \
+  grep -i "token\|nonce\|salt\|key\|secret\|id\|uuid\|otp"
+
+# 或位于 auth/security/crypto 相关目录
+grep -rn "Random()" lib/features/auth/ lib/core/security/ \
+  lib/core/crypto/ lib/core/storage/ --include="*.dart" 2>/dev/null | \
+  grep -v "Random\.secure\|//\|test"
+```
+
+修复建议：安全场景一律使用 `Random.secure()`；生成 token 推荐 `uuid` 包或 `cryptography` 包的安全随机字节。
+
 ---
 
 ## 输出格式
+
+**修复片段要求：** 对每个 HIGH 及以上的问题，在 message 字段后附加 `fix` 字段，提供 3-5 行 Dart 代码展示正确写法（不完整代码用 `...` 省略）。
 
 返回结构化 JSON：
 ```json
@@ -155,14 +211,32 @@ AndroidManifest 中 Activity/Service/BroadcastReceiver 设置了 `exported=true`
       "file": "lib/features/auth/data/auth_repository_impl.dart",
       "line": 15,
       "rule": "S1",
-      "message": "hardcoded API key: apiKey = \"sk-abc123...\"，应从 --dart-define 或安全存储读取"
+      "message": "hardcoded API key: apiKey = \"sk-abc123...\"，应从 --dart-define 或安全存储读取",
+      "fix": "// ❌ 错误\nconst apiKey = \"sk-abc123...\";\n// ✅ 正确\nconst apiKey = String.fromEnvironment('API_KEY');"
+    },
+    {
+      "severity": "CRITICAL",
+      "file": "lib/core/crypto/password_service.dart",
+      "line": 12,
+      "rule": "S13",
+      "message": "使用 MD5 哈希密码，存在彩虹表攻击风险",
+      "fix": "// ❌ 错误\nfinal hash = md5.convert(utf8.encode(password)).toString();\n// ✅ 正确（使用 cryptography 包）\nfinal algorithm = Argon2id(memory: 65536, ...);\nfinal hash = await algorithm.deriveKey(secretKey: ...);"
     },
     {
       "severity": "HIGH",
       "file": "lib/core/storage/app_storage.dart",
       "line": 42,
       "rule": "S2",
-      "message": "refreshToken 存储在 Hive（明文），应改用 FlutterSecureStorage"
+      "message": "refreshToken 存储在 Hive（明文），应改用 FlutterSecureStorage",
+      "fix": "// ❌ 错误\nbox.put('refreshToken', token);\n// ✅ 正确\nconst storage = FlutterSecureStorage();\nawait storage.write(key: 'refreshToken', value: token);"
+    },
+    {
+      "severity": "HIGH",
+      "file": "lib/features/auth/data/auth_service.dart",
+      "line": 28,
+      "rule": "S14",
+      "message": "使用 math.Random() 生成 token，随机数可预测",
+      "fix": "// ❌ 错误\nfinal token = Random().nextInt(999999).toString();\n// ✅ 正确\nfinal bytes = List<int>.generate(32, (_) => Random.secure().nextInt(256));\nfinal token = base64Url.encode(bytes);"
     }
   ]
 }

@@ -6,9 +6,16 @@ tools: Read, Grep, Glob, Bash
 
 # Flutter Architecture Reviewer
 
-接收变更文件列表和项目根路径，检查架构规范。
+接收以下参数（由 orchestrator 传入）：
+- `changed_files`：变更文件列表
+- `project_root`：项目根路径
+- `state_management`：已检测到的状态管理框架（riverpod | bloc | provider | getx | mobx | signals | unknown）
+- `enabled_rules`：`analysis_options.yaml` 中已启用的 lint 规则（逗号分隔）
+- `project_conventions`：项目 CLAUDE.md 内容（如有）
 
-参考项目：`/Users/mac/Desktop/ArkUI-X/bookkeeping_flutter`（Riverpod StateNotifier + Feature-First + Repository）
+**只报告置信度 ≥ 80% 的问题。相同类型问题合并汇报（"N 处 X 问题"，附示例位置），不逐条列举。对未变更代码，仅报 CRITICAL 级别问题。**
+
+**框架适配规则：** 若 `state_management` 已确定，只执行对应框架的检查规则，跳过不相关框架的专项检查（如 Riverpod 项目不跑 BLoC 专项检查 C7，BLoC 项目不跑 C8/C10）。
 
 ---
 
@@ -100,6 +107,25 @@ grep -r "flutter_bloc\|riverpod\|provider\|get:\|mobx\|signals" pubspec.yaml
 ### C6. 订阅/Dispose 配对 [HIGH]
 `.listen()` 的 `StreamSubscription` 必须在 `dispose()`/`close()` 中 cancel。Timer、AnimationController 同理。MobX 的 `ReactionDisposer`、Signals 的 effect cleanup 也必须在 dispose 中执行。
 检测：计算文件内 `.listen(` 和 `.cancel()` 的数量是否匹配；`grep -n "ReactionDisposer\|_dispose" lib/`
+
+扩展检测命令（AnimationController、FocusNode、TextEditingController）：
+```bash
+# AnimationController / Ticker 未 dispose
+grep -n "AnimationController\|createTicker\|SingleTickerProviderStateMixin\|TickerProviderStateMixin" \
+  <file> | grep -v "dispose\|//\|test" | while read line; do
+  grep -q "\.dispose()" <file> || echo "$line → 可能缺少 AnimationController.dispose()"
+done
+
+# FocusNode 未 dispose
+grep -n "FocusNode()" <file> | grep -v "dispose\|//\|test" | while read line; do
+  grep -q "\.dispose()" <file> || echo "$line → FocusNode 可能未 dispose"
+done
+
+# TextEditingController 未 dispose
+grep -n "TextEditingController()" <file> | grep -v "dispose\|//\|test" | while read line; do
+  grep -q "\.dispose()" <file> || echo "$line → TextEditingController 可能未 dispose"
+done
+```
 
 ### C7. BLoC 跨域依赖（仅 BLoC 项目）[MEDIUM]
 BLoC 不应直接依赖另一个 BLoC，应通过共享 Repository 或 presentation 层协调。
@@ -212,6 +238,8 @@ BlocObserver / ProviderObserver 存在但未将 onError 接入错误上报服务
 
 ## 输出格式
 
+**修复片段要求：** 对每个 HIGH 及以上的问题，在 message 字段后附加 `fix` 字段，提供 3-5 行 Dart 代码展示正确写法（不完整代码用 `...` 省略）。
+
 返回结构化 JSON：
 ```json
 {
@@ -222,14 +250,16 @@ BlocObserver / ProviderObserver 存在但未将 onError 接入错误上报服务
       "file": "lib/features/bill/providers/bill_provider.dart",
       "line": 23,
       "rule": "B1",
-      "message": "StateNotifier 直接 import DioClient，应通过 BillRepository"
+      "message": "StateNotifier 直接 import DioClient，应通过 BillRepository",
+      "fix": "// ❌ 错误\nfinal dio = ref.read(dioClientProvider);\nfinal data = await dio.get('/bills');\n// ✅ 正确\nfinal repo = ref.read(billRepositoryProvider);\nfinal data = await repo.fetchBills();"
     },
     {
       "severity": "HIGH",
       "file": "lib/features/bill/providers/bill_notifier.dart",
       "line": 12,
       "rule": "C2",
-      "message": "使用 isLoading+hasError 布尔标志组合，应改用 AsyncValue 或 sealed class"
+      "message": "使用 isLoading+hasError 布尔标志组合，应改用 AsyncValue 或 sealed class",
+      "fix": "// ❌ 错误\nbool isLoading = false;\nbool hasError = false;\nList<Bill> data = [];\n// ✅ 正确（Riverpod）\nclass BillNotifier extends AsyncNotifier<List<Bill>> { ... }"
     }
   ]
 }

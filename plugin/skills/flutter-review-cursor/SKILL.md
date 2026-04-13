@@ -1,14 +1,14 @@
 ---
 name: flutter-review
-description: Flutter 项目自动代码检测与 Review（Cursor 版）。支持 --fast（仅 analyze）、--medium（默认，analyze+多维检测）、--deep（全检测）、--all（全量）、--file <path>（指定目录）。所有逻辑内联执行，不依赖 Agent 工具。
+description: Flutter 项目自动代码检测与 Review（Cursor 版）。支持 --fast（仅 analyze）、--medium（默认，analyze+多维检测）、--deep（全检测）、--all（全量）、--file <path>（指定目录）、--project <path>（指定项目）。所有逻辑内联执行，不依赖 Agent 工具。自动检测项目路径、状态管理框架、lint 规则，输出 BLOCK/APPROVE 结论。
 ---
 
 # Flutter Code Review（Cursor 版）
 
 Cursor 版本：所有检测逻辑内联执行，不依赖 Agent 工具。
 
-默认项目路径：`/Users/mac/Desktop/ArkUI-X/bookkeeping_flutter`
-报告输出路径：`/Users/mac/Desktop/CodeReview/reports/`
+**零配置：** 自动检测当前目录或 git 根目录的 Flutter 项目，无需手动配置路径。
+报告输出路径：`<project_root>/../flutter-review-reports/`
 
 ## 参数解析
 
@@ -23,6 +23,8 @@ Cursor 版本：所有检测逻辑内联执行，不依赖 Agent 工具。
   - 配合 `--fast`：**纯命令行驱动，不读文件内容，token 消耗极低** ⚡️
   - 配合 `--medium/--deep`：逐文件 AI 分析（会提示确认）
 - `--file <path>` → 指定目录（可与 --all 或默认增量组合）
+- `--project <path>` → 显式指定 Flutter 项目根目录（跨目录使用）
+- `--fix` → 在 Review 完成后自动执行 `dart fix --apply && dart format lib/`（仅 APPROVE 状态时执行）
 
 ## 使用示例
 
@@ -37,21 +39,57 @@ Cursor 版本：所有检测逻辑内联执行，不依赖 Agent 工具。
 
 /flutter-review --file lib/features/bill                  # 增量，限定目录
 /flutter-review --all --fast --file lib/features/bill     # 轻量全量，限定目录
+/flutter-review --project /path/to/other/flutter/app      # 指定任意 Flutter 项目
 ```
 
 ---
 
 ## 执行流程
 
-### Step 1：定位 Flutter 项目根目录
-
-运行以下命令确认当前目录是否为 Flutter 项目：
+### Step 1：零配置定位 Flutter 项目根目录
 
 ```bash
-ls pubspec.yaml 2>/dev/null || echo "not_flutter_root"
+# 优先级：--project 参数 > 当前目录 > git 根目录
+if [ -n "$project_path" ]; then
+  PROJECT_ROOT="$project_path"
+elif [ -f "./pubspec.yaml" ]; then
+  PROJECT_ROOT="$(pwd)"
+else
+  PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+  if [ -z "$PROJECT_ROOT" ] || [ ! -f "$PROJECT_ROOT/pubspec.yaml" ]; then
+    echo "ERROR: 未找到 Flutter 项目。请在 Flutter 项目目录运行，或使用 --project /path 指定。"
+    exit 1
+  fi
+fi
+REPORT_DIR="$(dirname "$PROJECT_ROOT")/flutter-review-reports"
+mkdir -p "$REPORT_DIR"
+echo "📁 项目：$PROJECT_ROOT"
 ```
 
-如果不是 Flutter 项目根目录，切换到 `/Users/mac/Desktop/ArkUI-X/bookkeeping_flutter`。
+### Step 1b：环境感知
+
+```bash
+# 加载 CLAUDE.md 项目约定
+[ -f "$PROJECT_ROOT/CLAUDE.md" ] && echo "📋 已加载项目约定（CLAUDE.md）"
+
+# 检测已启用 lint 规则
+ENABLED_LINT_RULES=""
+[ -f "$PROJECT_ROOT/analysis_options.yaml" ] && \
+  ENABLED_LINT_RULES=$(grep -E "^\s+- [a-z]" "$PROJECT_ROOT/analysis_options.yaml" \
+    | sed 's/.*- //' | tr '\n' ',') && \
+  echo "📋 lint 规则：$ENABLED_LINT_RULES"
+
+# 自动识别状态管理框架
+STATE_MGMT="unknown"
+PUBSPEC="$PROJECT_ROOT/pubspec.yaml"
+grep -q "flutter_bloc\|  bloc:" "$PUBSPEC"          && STATE_MGMT="bloc"
+grep -q "flutter_riverpod\|  riverpod:" "$PUBSPEC"   && STATE_MGMT="riverpod"
+grep -q "^  provider:" "$PUBSPEC"                    && STATE_MGMT="provider"
+grep -q "^  get:" "$PUBSPEC"                         && STATE_MGMT="getx"
+grep -q "  mobx:" "$PUBSPEC"                         && STATE_MGMT="mobx"
+grep -q "  signals:" "$PUBSPEC"                      && STATE_MGMT="signals"
+echo "🔍 状态管理框架：$STATE_MGMT"
+```
 
 ### Step 2：确定扫描范围
 
@@ -66,12 +104,18 @@ git diff --name-only --cached 2>/dev/null
 
 如果没有变更文件（干净工作区），自动切换为全量模式并提示用户。
 
+**存储变更 diff（用于 MEDIUM/LOW 变更行过滤）：**
+```bash
+git diff HEAD --unified=0 2>/dev/null > /tmp/review_diff.patch
+git diff --cached --unified=0 2>/dev/null >> /tmp/review_diff.patch
+```
+
 #### 全量 + Fast 模式（`--all --fast`）⚡️
 
 **纯命令行驱动，零 AI token 消耗，直接执行 shell 输出结果：**
 
 ```bash
-ROOT="${target_path:-lib}"
+ROOT="${target_path:-$PROJECT_ROOT/lib}"
 
 echo "=== flutter analyze ==="
 flutter analyze --no-fatal-infos 2>&1
@@ -193,6 +237,9 @@ flutter analyze --no-fatal-infos 2>&1 | head -100
 - `[R6]` TextStyle fontSize 硬编码不响应系统字体大小
 - `[A1]` IconButton/GestureDetector 缺少 Semantics/tooltip
 - `[I1]` Text('...') 硬编码用户可见字符串
+- `[D15]` 函数圈复杂度过高：非 build() 函数超 50 行或嵌套深度 > 4 层（MEDIUM）
+- `[D16]` 未使用 import：import 声明无对应使用，可通过 --fix 自动清除（MEDIUM）
+- `[D17]` Widget 子树重复：同文件同 Widget 出现 3+ 次建议提取（LOW）
 
 **安全检测（对应 flutter-security-reviewer 规则）：**
 - `[S1]` 硬编码 apiKey/secret/password/token 赋值（应用 --dart-define 或安全存储）
@@ -203,6 +250,8 @@ flutter analyze --no-fatal-infos 2>&1 | head -100
 - `[S7]` SSL 校验禁用（`badCertificateCallback` 返回 true）
 - `[S9]` 用户输入未经 validator 直接传给 API
 - `[S10]` Deep link URL 参数未校验直接用于导航
+- `[S13]` 弱加密算法：XOR/MD5/SHA1 用于密码、DES、ECB 模式（CRITICAL）
+- `[S14]` 不安全随机数：安全场景使用 `Random()` 而非 `Random.secure()`（HIGH）
 
 **测试检测（对应 flutter-test-reviewer 规则）：**
 - 检查变更文件是否有对应 `_test.dart`
@@ -238,12 +287,19 @@ find "${target_path:-lib}" -name "*.dart" | wc -l
 
 ### Step 5：聚合结果 + 生成报告
 
+**聚合规则：**
+- 置信度 ≥ 80% 的问题才输出；启发式检测结果用 ⚠️ 标注提示人工确认
+- 相同 rule + 相同 severity 的问题合并（"N 处 X 问题，示例：file:line"）
+- MEDIUM/LOW 问题仅报变更行内的匹配（未变更代码不报 MEDIUM/LOW）
+- 框架适配：已识别 `STATE_MGMT` 后，跳过不相关框架的问题（如 Riverpod 项目不报 BLoC 专项）
+- `enabled_rules` 中已覆盖的 lint 规则对应问题不重复报告
+
 **终端输出格式：**
 
 ```
 ═══════════════════════════════════════════════════
   Flutter Code Review — YYYY-MM-DD HH:MM
-  Mode: medium | Files reviewed: N
+  Mode: medium | Files reviewed: N | Framework: riverpod
 ═══════════════════════════════════════════════════
 
 🔴 CRITICAL: N  🟠 HIGH: N  🟡 MEDIUM: N  🔵 LOW: N
@@ -255,6 +311,7 @@ find "${target_path:-lib}" -name "*.dart" | wc -l
 ─── Lint / Dart ────────────────────────────────────
   [CRITICAL] L4  lib/features/auth/presentation/login_screen.dart:45
                  async 函数后使用 setState 前未检查 mounted
+  [MEDIUM]   L2 ⚠️  硬编码颜色（5 处，示例：lib/features/home/home_screen.dart:32）
 
 ─── Security ───────────────────────────────────────
   [HIGH]   S2  lib/core/storage/app_storage.dart:42
@@ -264,21 +321,28 @@ find "${target_path:-lib}" -name "*.dart" | wc -l
   ✅ 42 passed / ❌ 0 failed
   缺少测试: lib/features/bill/providers/bill_provider.dart
 
+─── Verdict ────────────────────────────────────────
+  CRITICAL: N  HIGH: N  →  🚫 BLOCK / ✅ APPROVE
+
+  判定规则：有任意 CRITICAL 或 HIGH → 🚫 BLOCK（合并前必须修复）
+           全部 MEDIUM/LOW → ✅ APPROVE（可带问题合入）
+
 ═══════════════════════════════════════════════════
-  报告已保存：reports/review_YYYYMMDD_HHMMSS.md
+  报告已保存：<REPORT_DIR>/review_YYYYMMDD_HHMMSS.md
 ═══════════════════════════════════════════════════
 ```
 
 **同时写入 Markdown 报告文件：**
-路径：`/Users/mac/Desktop/CodeReview/reports/review_YYYYMMDD_HHMMSS.md`
+路径：`$REPORT_DIR/review_YYYYMMDD_HHMMSS.md`
 
 报告格式：
 ```markdown
 # Flutter Code Review Report
 **Date:** YYYY-MM-DD HH:MM
 **Mode:** medium
-**Project:** bookkeeping_flutter
+**Project:** <project_name>
 **Files Reviewed:** N
+**Framework:** riverpod
 
 ## Summary
 | Severity | Count |
@@ -287,6 +351,7 @@ find "${target_path:-lib}" -name "*.dart" | wc -l
 | 🟠 HIGH | N |
 | 🟡 MEDIUM | N |
 | 🔵 LOW | N |
+| **Verdict** | 🚫 BLOCK / ✅ APPROVE |
 
 ## Flutter Analyze
 [analyze 原始输出]
@@ -304,7 +369,7 @@ find "${target_path:-lib}" -name "*.dart" | wc -l
 [测试结果 + 缺失测试文件列表]
 ```
 
-### Step 6：CRITICAL 处理
+### Step 6：CRITICAL/BLOCK 处理
 
 如发现 CRITICAL 级别问题，输出：
 
@@ -312,6 +377,30 @@ find "${target_path:-lib}" -name "*.dart" | wc -l
 ⚠️  发现 CRITICAL 问题！请在修复以下问题后再提交：
    - [问题列表]
 ```
+
+**Verdict 判定：** 有任意 CRITICAL 或 HIGH → `🚫 BLOCK`；全部 MEDIUM/LOW → `✅ APPROVE`
+
+### Step 7：自动修复（仅 --fix 模式）
+
+如用户传入 `--fix` 参数，在报告生成后执行：
+
+- 若 Verdict 为 **APPROVE**（无 CRITICAL/HIGH）：
+```bash
+cd "$PROJECT_ROOT"
+echo "🔧 运行 dart fix..."
+dart fix --apply 2>&1
+echo "✨ 运行 dart format..."
+dart format lib/ 2>&1 | tail -5
+echo "✅ 自动修复完成，建议重新运行 /flutter-review 验证结果"
+```
+
+- 若 Verdict 为 **BLOCK**（存在 CRITICAL/HIGH）：
+```
+⚠️  检测到 CRITICAL/HIGH 问题，自动修复已跳过。
+   请先手动修复上述 CRITICAL/HIGH 问题后，再使用 --fix 参数。
+```
+
+注意：`dart fix --apply` 只修复有确定性自动修复的问题（未使用 import、可自动转换的 lint 警告等），不会引入语义变更。D16（未使用 import）可通过此步骤自动清除。
 
 ---
 

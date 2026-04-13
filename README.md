@@ -6,14 +6,24 @@
 
 | 能力 | 说明 |
 |------|------|
+| **零配置项目检测** | 自动检测当前目录或 git 根的 Flutter 项目，支持 `--project` 跨目录使用 |
+| **CLAUDE.md 约定感知** | 读取项目约定并传给所有 Agent，按实际项目规则检查 |
+| **analysis_options.yaml 感知** | 检测已启用 lint 规则，自动跳过已覆盖的检查，消除重复报告 |
+| **状态管理框架自动识别** | 检测 Riverpod/BLoC/GetX/MobX/Signals，只执行对应框架规则 |
+| **80% 置信度 + 问题合并** | 相同类型问题合并汇报（"N 处 X 问题"），过滤低置信度启发式结果 |
+| **BLOCK/APPROVE 结论** | 有 CRITICAL/HIGH → 🚫 BLOCK；全 MEDIUM/LOW → ✅ APPROVE |
+| **变更行过滤** | MEDIUM/LOW 仅报变更行内的问题，CRITICAL/HIGH 全文件扫描 |
 | 增量扫描 | 只检测 `git diff` 变更文件，日常提交前使用 |
 | 全量轻量扫描 | 纯命令行驱动，不读文件内容，token 极低，整个工程体检 |
 | 全量深度扫描 | 逐文件 AI 分析，适合版本里程碑前的完整审查 |
 | 多维度检查 | 架构 / Lint / Dart 语言 / 安全 / 测试 / Accessibility / i18n |
 | 测试执行 | 实际运行 `flutter test`，检查缺失测试文件 |
 | 测试生成 | Deep 模式自动生成缺失测试的 scaffold 文件 |
-| 报告输出 | 终端摘要 + Markdown 文件（存入 `reports/`） |
+| 报告输出 | 终端摘要 + Markdown 文件（存入 `flutter-review-reports/`） |
 | Hooks 集成 | 修改 .dart 文件后自动提示，支持 git pre-commit |
+| **自动修复闭环** | `--fix` 参数：Review 后执行 `dart fix --apply + dart format`（APPROVE 状态时） |
+| **弱加密检测** | S13: XOR/MD5/SHA1/DES/ECB 检测（CRITICAL）；S14: `Random()` vs `Random.secure()`（HIGH） |
+| **代码质量度量** | D15: 圈复杂度（嵌套深度/函数长度）；D16: 未使用 import；D17: Widget 重复子树 |
 
 ---
 
@@ -46,6 +56,9 @@
 - 无障碍：语义标签、点击目标大小、焦点顺序、装饰性元素排除、颜色非唯一状态指示
 - 国际化：硬编码字符串、字符串拼接、日期/数字格式化、RTL 布局
 - 静态分析配置：`analysis_options.yaml` 严格配置（strict-casts、unawaited_futures 等）
+- **圈复杂度**（D15）：非 build() 函数超 50 行或嵌套深度 > 4 层
+- **未使用 import**（D16）：无对应使用的 import 声明，配合 --fix 自动清除
+- **Widget 重复子树**（D17）：同文件同 Widget 出现 3+ 次建议提取为独立 Widget
 
 ### 安全（`flutter-security-reviewer`）
 - 硬编码密钥（应用 `--dart-define` / `.env`，不出现在源码）
@@ -55,6 +68,8 @@
 - 用户输入未验证即传给 API、Deep link URL 注入
 - 401 处理缺失、URL 参数携带 token、Token 刷新与过期处理
 - 生物识别认证评估、Android 导出组件未保护
+- **弱加密算法**（S13）：XOR 加密、MD5/SHA1 密码哈希、DES、ECB 模式检测（CRITICAL）
+- **不安全随机数**（S14）：安全场景使用 `math.Random()` 而非 `Random.secure()`（HIGH）
 
 ### 测试（`flutter-test-reviewer`）
 - 检查每个 `lib/` 文件是否有对应 `_test.dart`
@@ -113,14 +128,13 @@ bash scripts/install-claude.sh
 
 > 将 `/path/to/flutter-code-review` 替换为实际克隆路径，然后重启 Claude Code。
 
-### 配置目标项目路径
+### 配置目标项目路径（可选）
 
-编辑 `agents/flutter-review-orchestrator.md`，将默认项目路径改为你的 Flutter 项目：
+工具支持**零配置**自动检测：
+- 在 Flutter 项目目录内运行 → 自动识别
+- 使用 `--project /path/to/flutter_project` 参数显式指定
 
-```
-默认项目路径：`/path/to/your/flutter_project`
-报告输出路径：`/path/to/flutter-code-review/reports/`
-```
+报告自动输出到 `<project_root>/../flutter-review-reports/`，无需配置。
 
 ---
 
@@ -171,12 +185,19 @@ Cursor 版与 Claude Code 版功能一致，区别在于：
 /flutter-review --all --fast --file lib/features/auth
 ```
 
+### 跨项目使用（零配置，无需修改任何配置文件）
+
+```
+/flutter-review --project /path/to/any/flutter_project
+/flutter-review --fast --project /path/to/another/app
+```
+
 ### 模式对比
 
 | 命令 | Token 消耗 | 耗时 | 适用场景 |
 |------|-----------|------|---------|
 | `--fast` | ~5k | 30秒 | 快速检查，随时用 |
-| `--medium`（默认）| ~30k | 2-3分钟 | 功能完成后提交前 |
+| `--medium`（默认）| ~30k | 2-3分钟 | 功能完成后提交前（输出 BLOCK/APPROVE） |
 | `--deep` | ~80k | 5-10分钟 | PR 前完整审查 |
 | `--all --fast` | ~5k | 1分钟 | 每周工程体检 |
 | `--all --medium` | ~300k+ | 20分钟+ | 版本发布前（偶尔）|
@@ -270,6 +291,108 @@ flutter-code-review/
 | 🟠 HIGH | 架构违规或重要规范问题 | 本次迭代内修复 |
 | 🟡 MEDIUM | 代码质量问题，有改进空间 | 记录并计划修复 |
 | 🔵 LOW | 最佳实践建议 | 有时间时优化 |
+
+---
+
+## 竞品对比
+
+### 对比工具
+
+| 工具 | 类型 | 定价 | 部署方式 |
+|------|------|------|---------|
+| **本工具** (flutter-code-review) | AI Agent + CLI | 免费开源 | 本地 |
+| **CodeRabbit** | AI SaaS | $15-19/用户/月 | 云端 |
+| **DCM (Dart Code Metrics)** | 静态分析 CLI | $39/月 | 本地/CI |
+| **LucasXu0/claude-code-plugin** | Claude Code 插件 | 免费开源 | 本地 |
+| **flutter analyze（官方）** | 静态分析 | 免费 | 本地/CI |
+
+### 安全检测覆盖
+
+| 检测项 | 本工具 | CodeRabbit | DCM | LucasXu0 | flutter analyze |
+|--------|--------|-----------|-----|----------|----------------|
+| 硬编码 API Key/Secret | ✅ S1 CRITICAL | ✅ | ❌ | ✅ | ❌ |
+| 敏感数据明文存储（Hive vs Keychain） | ✅ S2 HIGH | ⚠️ 通用 | ❌ | ❌ | ❌ |
+| 日志泄露（token/password in print） | ✅ S3 HIGH | ✅ | ❌ | ❌ | ❌ |
+| 明文 HTTP | ✅ S5 HIGH | ✅ | ❌ | ✅ | ❌ |
+| SSL 证书校验禁用 | ✅ S7 HIGH | ✅ | ❌ | ❌ | ❌ |
+| Deep Link URL 注入 | ✅ S10 HIGH | ⚠️ 通用 | ❌ | ❌ | ❌ |
+| 弱加密算法（XOR/MD5/SHA1/DES/ECB） | ✅ S13 CRITICAL | ✅ | ❌ | ❌ | ❌ |
+| 不安全随机数（Random() vs Random.secure()） | ✅ S14 HIGH | ✅ | ❌ | ❌ | ❌ |
+| 用户输入未验证 | ✅ S9 HIGH | ⚠️ 通用 | ❌ | ❌ | ❌ |
+
+### 架构规范覆盖
+
+| 检测项 | 本工具 | CodeRabbit | DCM | LucasXu0 | flutter analyze |
+|--------|--------|-----------|-----|----------|----------------|
+| Feature-First 目录结构 | ✅ A1 | ❌ | ❌ | ❌ | ❌ |
+| Repository 模式（Provider 不直连网络） | ✅ B1 HIGH | ⚠️ 通用 | ❌ | ❌ | ❌ |
+| Widget 不直接调用 API | ✅ B3 CRITICAL | ⚠️ 通用 | ❌ | ❌ | ❌ |
+| 布尔标志状态反模式（isLoading+hasError） | ✅ C2 HIGH | ❌ | ❌ | ❌ | ❌ |
+| 状态不可变性（Riverpod/BLoC/MobX 多框架） | ✅ C1 HIGH | ⚠️ 通用 | ❌ | ❌ | ❌ |
+| 订阅/Dispose 配对（含 AnimationController） | ✅ C6 HIGH | ⚠️ 通用 | ❌ | ❌ | ❌ |
+| 跨 Feature 内部 import | ✅ A4 HIGH | ❌ | ❌ | ❌ | ❌ |
+| Auth Guard / 路由保护 | ✅ N5 HIGH | ❌ | ❌ | ❌ | ❌ |
+| 状态管理框架自动识别（6 框架） | ✅ | ❌ | ❌ | ❌ | ❌ |
+
+### Dart/Flutter Lint 覆盖
+
+| 检测项 | 本工具 | CodeRabbit | DCM | LucasXu0 | flutter analyze |
+|--------|--------|-----------|-----|----------|----------------|
+| async 后未检查 mounted | ✅ L4 CRITICAL | ⚠️ | ❌ | ✅ | ✅ |
+| build() 超 80 行 | ✅ L1 HIGH | ⚠️ | ✅ | ❌ | ❌ |
+| 圈复杂度（嵌套 > 4 / 函数 > 50 行） | ✅ D15 MEDIUM | ❌ | ✅ | ❌ | ❌ |
+| 未使用 import | ✅ D16 MEDIUM | ⚠️ | ✅ | ❌ | ✅ |
+| Widget 重复子树（3+ 次） | ✅ D17 LOW | ❌ | ✅ | ❌ | ❌ |
+| Dart 3 Pattern Matching 建议 | ✅ D12 LOW | ❌ | ⚠️ | ❌ | ❌ |
+| shrinkWrap 嵌套 ListView | ✅ L9 HIGH | ❌ | ❌ | ❌ | ❌ |
+| UniqueKey 在 build() 中 | ✅ L11 HIGH | ❌ | ✅ | ❌ | ❌ |
+| analysis_options.yaml 感知（跳过重复） | ✅ | ❌ | ❌ | ❌ | N/A |
+
+### 工程能力对比
+
+| 能力 | 本工具 | CodeRabbit | DCM | LucasXu0 | flutter analyze |
+|------|--------|-----------|-----|----------|----------------|
+| 自动修复闭环（--fix） | ✅ `dart fix + format` | ❌ 仅建议 | ❌ | ✅ 基础 | ❌ |
+| 修复代码片段（fix 字段附 Dart 示例） | ✅ HIGH+ | ✅ | ❌ | ❌ | ❌ |
+| 增量扫描（git diff） | ✅ | ✅ PR 触发 | ❌ 全量 | ✅ | ❌ |
+| 变更行过滤（MEDIUM/LOW 只报变更行） | ✅ | ✅ | ❌ | ❌ | ❌ |
+| BLOCK/APPROVE 结论 | ✅ | ✅ | ❌ | ❌ | ❌ |
+| 零配置自动检测项目 | ✅ | ✅ | ❌ 需配置 | ✅ | ✅ |
+| 并行 Agent 执行（4 Agent 同时） | ✅ | N/A | N/A | ❌ | N/A |
+| 全量轻量模式（纯 CLI，零 token） | ✅ --all --fast | ❌ | ✅ | ❌ | ✅ |
+| 测试实际执行 + scaffold 生成 | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Cursor 版（内联执行，无需 Agent） | ✅ | ❌ | ❌ | ❌ | ❌ |
+| 代码上传风险 | 无（本地） | 有（云端） | 无 | 无 | 无 |
+
+### 规则数量汇总
+
+| 类别 | 本工具 | DCM | flutter analyze | CodeRabbit |
+|------|--------|-----|----------------|-----------|
+| 安全 | **14 条** | ~5 条 | 0 条 | ~20 条（通用） |
+| 架构 / 设计模式 | **25 条** | ~10 条 | 0 条 | ~5 条（通用） |
+| Dart/Flutter Lint | **63 条** | **475+ 条** | ~100 条 | ~30 条（通用） |
+| 测试 | **7 条** | 0 条 | 0 条 | ~5 条（通用） |
+| **合计** | **~109 条** | **490+ 条** | ~100 条 | 通用，非 Flutter 专项 |
+
+> DCM 规则数量最多，但绝大多数为 Dart 语言层面的静态规则（命名规范、代码风格）。本工具侧重 Flutter 专项高价值规则（架构、安全、测试），在**有效密度**上更高。
+
+### 核心差异化优势
+
+1. **Flutter 语境深度** — 唯一理解状态管理框架差异（Riverpod/BLoC/MobX/GetX/Signals）并按框架切换规则的工具
+2. **架构规则完整性** — Feature-First 目录、Repository 模式、DI 规范等 25 条架构规则，竞品均无
+3. **测试生命周期集成** — 实际执行 `flutter test`、检查状态转移三路径、Deep 模式自动生成 scaffold
+4. **修复闭环** — `--fix` 执行 `dart fix --apply + dart format`；`fix` 字段对每个 HIGH+ 问题附 Dart 示例代码
+5. **隐私安全** — 全本地运行，无代码上传至云端（CodeRabbit 需上传代码）
+6. **零订阅费** — 免费开源，无月费
+
+### 仍存在的差距
+
+| 差距项 | 对标工具 | 说明 |
+|--------|---------|------|
+| 纯静态 Lint 规则数量（475+ vs 63） | DCM | DCM 专注命名/风格，本工具侧重高价值规则 |
+| CI/CD GitHub App 集成（PR 自动评论）| CodeRabbit | 本工具需手动触发，暂无 PR bot |
+| analysis_options 规则自动写入 | DCM | DCM 可生成配置文件 |
+| 多语言项目支持（非纯 Flutter）| CodeRabbit | 本工具专注 Flutter |
 
 ---
 
