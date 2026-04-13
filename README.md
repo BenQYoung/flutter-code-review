@@ -20,41 +20,51 @@
 ## 检查项覆盖范围
 
 ### 架构（`flutter-arch-reviewer`）
-- Feature-First 目录结构合规
-- Repository 模式（Provider/Notifier 不直连网络层）
-- Widget 不直接调用 API
-- 状态管理多框架支持：Riverpod / BLoC / GetX / MobX
-  - 状态不可变性
-  - 禁止布尔标志状态组合（`isLoading + hasError`）
-  - UI 分支穷举处理
-  - 订阅与 Dispose 配对
-- 跨 Feature 内部 import 检测
-- 路由规范（命令式/声明式混用、路径硬编码）
-- 错误处理架构（全局 handler、原始异常暴露、空 catch）
-- 依赖包审查（版本约束、dev_dependencies 分离、未使用依赖）
+- Feature-First 目录结构、Barrel export 同步、平台代码隔离
+- Repository 模式（Provider/Notifier 不直连网络层）、Widget 不直接调用 API
+- 状态管理多框架支持：Riverpod / BLoC / GetX / MobX / Signals
+  - 状态不可变性（含 MobX `@action`、Signals `.value` 规范）
+  - 禁止布尔标志状态组合（`isLoading + hasError`），应用 AsyncValue / sealed class
+  - State 类 `==` / `hashCode` 实现（Equatable / freezed / 手动）
+  - UI 分支穷举处理、订阅与 Dispose 配对
+  - MobX computed 派生状态、Riverpod ref.watch 循环检测
+- DI 规范：接口依赖而非实现、无循环依赖、环境 binding 用配置
+- 跨 Feature 内部 import、Monorepo 跨包私有 `src/` import
+- 路由规范（命令式/声明式混用、路径硬编码、Deep link 校验、Auth guard）
+- 错误处理架构（全局 handler、Crashlytics/Sentry 集成、BlocObserver 接入、ErrorWidget 定制）
+- 依赖包审查（版本约束、dev_dependencies 分离、未使用依赖、pub.dev 质量评估）
 
 ### Lint / Dart 语言（`flutter-lint-reviewer`）
-- Dart 语言陷阱：隐式 dynamic、Bang 操作符滥用、过宽 catch、无意义 async、late 滥用、循环内字符串拼接、忽略 Future 返回值
-- Widget 规范：build() 长度、硬编码颜色/间距、shrinkWrap 嵌套、UniqueKey、build() 内副作用
-- async 后未检查 mounted（CRITICAL）
-- MediaQuery 旧用法（`of(context).size` → `sizeOf`）
-- WillPopScope 废弃、Image.network 无缓存、print 语句
-- 无障碍（Accessibility）：语义标签、点击目标大小、颜色非唯一状态指示
-- 国际化（i18n）：硬编码字符串、字符串拼接、日期/数字格式化
-- 静态分析配置：`analysis_options.yaml` 严格配置检查
+- Dart 语言陷阱：隐式 dynamic、Bang 操作符滥用、过宽 catch（含捕获 Error）、无意义 async、late 滥用、循环内字符串拼接、忽略 Future 返回值
+- **Dart 3 新特性**：Pattern Matching、switch 表达式、if-case、Records 替代单用 DTO
+- Widget 规范：build() 超 80 行应拆 Widget 类（非私有方法）、`_build*()` 私有方法、UniqueKey、build() 内副作用、StatefulWidget 过度使用
+- const 规范：const 构造函数、const 集合字面量、const 传播、const 类中 mutable 字段
+- async 后未检查 mounted（CRITICAL）、MediaQuery 旧用法
+- WillPopScope 废弃、Image.network 无缓存
+- **性能**：build() 内耗时计算、RepaintBoundary、AnimatedBuilder child 参数、Opacity 动画、IntrinsicHeight/Width、图片 cacheWidth/cacheHeight、大列表用具体构造函数
+- **平台适配**：SafeArea、响应式布局、文本溢出、back navigation、权限声明、字体缩放
+- 无障碍：语义标签、点击目标大小、焦点顺序、装饰性元素排除、颜色非唯一状态指示
+- 国际化：硬编码字符串、字符串拼接、日期/数字格式化、RTL 布局
+- 静态分析配置：`analysis_options.yaml` 严格配置（strict-casts、unawaited_futures 等）
 
 ### 安全（`flutter-security-reviewer`）
-- 硬编码密钥（apiKey / secret / token 赋值为字符串字面量）
+- 硬编码密钥（应用 `--dart-define` / `.env`，不出现在源码）
 - 敏感数据明文存储（Hive 存储 token，应用 FlutterSecureStorage）
-- 日志泄露（print 输出敏感字段）
-- 明文 HTTP（非 localhost 的 `http://` 请求）
-- 401 处理缺失、URL 参数携带 token、SSL 证书校验禁用
+- 日志泄露（print 输出含 token/password/credential）
+- 明文 HTTP、SSL 证书校验禁用、证书 Pinning 评估
+- 用户输入未验证即传给 API、Deep link URL 注入
+- 401 处理缺失、URL 参数携带 token、Token 刷新与过期处理
+- 生物识别认证评估、Android 导出组件未保护
 
 ### 测试（`flutter-test-reviewer`）
 - 检查每个 `lib/` 文件是否有对应 `_test.dart`
-- 实际运行 `flutter test --coverage`
-- 覆盖率分析（低于 80% 标记警告）
-- Deep 模式：自动生成 Widget / StateNotifier / Repository 测试 scaffold
+- 实际运行 `flutter test --coverage`，覆盖率低于 80% 标记警告
+- **状态转移覆盖**：loading→success、loading→error、retry 三路径均须有测试
+- **测试隔离**：无共享可变状态、外部依赖必须 mock、最小 Stub 原则
+- **异步稳定性**：禁止 `Future.delayed` 时间假设，用 `pumpAndSettle`
+- **Golden Test**：设计关键 Widget 的截图回归测试
+- **集成测试**：`integration_test/` 关键用户流程覆盖
+- Deep 模式：自动生成 Widget / StateNotifier / BLoC / Repository 测试 scaffold
 
 ---
 
