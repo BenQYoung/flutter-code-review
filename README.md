@@ -160,84 +160,177 @@ Cursor 版与 Claude Code 版功能一致，区别在于：
 
 ## 使用方法
 
-在 Claude Code 对话框中输入以下命令：
+### 参数总览
 
-### 日常使用（增量，只扫描变更文件）
-
-```
-/flutter-review              # Medium 模式（推荐日常使用）
-/flutter-review --fast       # 快速模式：analyze + lint，约 30 秒
-/flutter-review --deep       # 深度模式：全检测 + 生成测试 scaffold
-```
-
-### 全量工程体检
-
-```
-/flutter-review --all --fast      # ⚡️ 轻量全量：纯命令行，token 极低，推荐
-/flutter-review --all             # 全量 Medium：逐文件 AI 分析（会提示确认）
-/flutter-review --all --deep      # 全量 Deep：最完整，耗时最长（会提示确认）
-```
-
-### 指定目录
-
-```
-/flutter-review --file lib/features/bill
-/flutter-review --all --fast --file lib/features/auth
-```
-
-### 跨项目使用（零配置，无需修改任何配置文件）
-
-```
-/flutter-review --project /path/to/any/flutter_project
-/flutter-review --fast --project /path/to/another/app
-```
-
-### 模式对比
-
-| 命令 | Token 消耗 | 耗时 | 适用场景 |
-|------|-----------|------|---------|
-| `--fast` | ~5k | 30秒 | 快速检查，随时用 |
-| `--medium`（默认）| ~30k | 2-3分钟 | 功能完成后提交前（输出 BLOCK/APPROVE） |
-| `--deep` | ~80k | 5-10分钟 | PR 前完整审查 |
-| `--all --fast` | ~5k | 1分钟 | 每周工程体检 |
-| `--all --medium` | ~300k+ | 20分钟+ | 版本发布前（偶尔）|
+| 参数 | 说明 |
+|------|------|
+| _(无参数)_ | 增量 Medium 模式，扫描 `git diff` 变更文件（推荐日常使用） |
+| `--fast` | Fast 模式：只跑 `flutter analyze` + 关键 lint grep，约 30 秒 |
+| `--medium` | Medium 模式：完整多维检测，输出 BLOCK/APPROVE 结论（默认） |
+| `--deep` | Deep 模式：全检测 + 生成缺失测试 scaffold 路径提示 |
+| `--all` | 全量模式：扫描整个 `lib/`（不加则仅扫描 git diff 变更文件） |
+| `--file <path>` | 限定扫描目录，可与 `--all` 或增量模式组合使用 |
+| `--project <path>` | 显式指定 Flutter 项目根目录（跨目录使用时传入） |
+| `--fix` | Review 完成后自动执行 `dart fix --apply && dart format lib/`，仅 APPROVE 状态时生效 |
 
 ---
 
-## 报告输出
+### 场景一：日常提交前检查（最常用）
 
-每次运行自动生成报告文件：`reports/review_YYYYMMDD_HHMMSS.md`
+在 Flutter 项目目录内，修改代码后提交前运行：
 
-终端输出示例：
+```bash
+# 增量 Medium（默认）：扫描 git diff 变更文件，输出 BLOCK/APPROVE
+/flutter-review
 
+# 增量 Fast：只跑 analyze + 关键 lint，适合频繁自检
+/flutter-review --fast
+
+# 增量 Deep：完整检测 + 显示缺失测试文件路径
+/flutter-review --deep
+```
+
+**输出示例：**
 ```
 ═══════════════════════════════════════════════════
-  Flutter Code Review — 2026-04-12 21:30
-  Mode: medium | Files reviewed: 8
+  Flutter Code Review — 2026-04-13 10:30
+  Mode: medium | Files reviewed: 5 | Framework: riverpod
 ═══════════════════════════════════════════════════
 
-🔴 CRITICAL: 1  🟠 HIGH: 3  🟡 MEDIUM: 5  🔵 LOW: 2
-
-─── Architecture ───────────────────────────────────
-  [HIGH]   B1  lib/features/bill/providers/bill_provider.dart:23
-               StateNotifier 直接 import DioClient，应通过 Repository
-
-─── Lint / Dart ────────────────────────────────────
-  [CRITICAL] L4  lib/features/auth/presentation/login_screen.dart:45
-                 async 函数后使用 setState 前未检查 mounted
+🔴 CRITICAL: 0  🟠 HIGH: 1  🟡 MEDIUM: 3  🔵 LOW: 1
 
 ─── Security ───────────────────────────────────────
   [HIGH]   S2  lib/core/storage/app_storage.dart:42
                refreshToken 存储在 Hive（明文），应用 FlutterSecureStorage
+               建议修复：
+               // ❌ 错误
+               box.put('refreshToken', token);
+               // ✅ 正确
+               await FlutterSecureStorage().write(key: 'refreshToken', value: token);
 
-─── Tests ──────────────────────────────────────────
-  ✅ 42 passed / ❌ 0 failed
-  缺少测试: lib/features/bill/providers/bill_provider.dart
+─── Verdict ────────────────────────────────────────
+  HIGH: 1  →  🚫 BLOCK（合并前必须修复）
 
 ═══════════════════════════════════════════════════
-  报告已保存：reports/review_20260412_213022.md
+  报告已保存：../flutter-review-reports/review_20260413_103022.md
 ═══════════════════════════════════════════════════
 ```
+
+---
+
+### 场景二：提交前检查 + 自动修复
+
+Review 通过（APPROVE）后，自动执行 `dart fix --apply && dart format`：
+
+```bash
+/flutter-review --fix           # Medium + 自动修复
+/flutter-review --fast --fix    # Fast + 自动修复
+```
+
+> 注意：存在 CRITICAL/HIGH 问题时（BLOCK 状态），`--fix` 不会执行，需先手动修复。
+
+---
+
+### 场景三：全量工程体检
+
+适合每周例行检查或版本发布前：
+
+```bash
+# ⚡️ 推荐：纯命令行驱动，不读文件内容，token 极低（约 5k）
+/flutter-review --all --fast
+
+# 限定某个 feature 目录做全量轻量检查
+/flutter-review --all --fast --file lib/features/auth
+
+# 全量 Medium：逐文件 AI 分析（文件 > 50 个会提示确认）
+/flutter-review --all
+
+# 全量 Deep：最完整，适合版本里程碑前
+/flutter-review --all --deep
+```
+
+---
+
+### 场景四：指定目录检查
+
+只检查某个 feature 或模块：
+
+```bash
+# 只扫描 bill feature 的变更文件
+/flutter-review --file lib/features/bill
+
+# 全量扫描 auth feature（不受 git diff 限制）
+/flutter-review --all --fast --file lib/features/auth
+
+# Deep 模式检查 core 目录
+/flutter-review --deep --file lib/core
+```
+
+---
+
+### 场景五：跨项目使用
+
+无需切换目录，在任意位置指定项目路径：
+
+```bash
+/flutter-review --project /path/to/my_flutter_app
+/flutter-review --fast --project ~/projects/another_app
+/flutter-review --all --fast --project /path/to/my_flutter_app
+```
+
+---
+
+### 场景六：PR 前完整审查
+
+功能开发完成、准备提 PR 时：
+
+```bash
+# Deep 模式：完整检测 + 列出缺失测试文件
+/flutter-review --deep
+
+# 全量 Deep（适合改动跨多个 feature）
+/flutter-review --all --deep
+```
+
+---
+
+### 模式选择参考
+
+| 命令 | Token 消耗 | 耗时 | 推荐场景 |
+|------|-----------|------|---------|
+| `/flutter-review --fast` | ~5k | 30 秒 | 随时自检，写代码过程中 |
+| `/flutter-review`（默认） | ~30k | 2-3 分钟 | 功能完成后，提交前 |
+| `/flutter-review --deep` | ~80k | 5-10 分钟 | PR 提交前完整审查 |
+| `/flutter-review --all --fast` | ~5k | 1 分钟 | 每周工程体检，整体扫描 |
+| `/flutter-review --all` | ~300k+ | 20 分钟+ | 版本发布前（偶尔使用） |
+| `/flutter-review --fix` | ~30k | 2-4 分钟 | 提交前检查 + 自动格式化 |
+
+---
+
+### 理解输出结论
+
+每次 Review 结束输出 **Verdict（裁决）**：
+
+| 结论 | 触发条件 | 建议操作 |
+|------|---------|---------|
+| 🚫 **BLOCK** | 存在任意 CRITICAL 或 HIGH 问题 | 合并前必须修复 |
+| ✅ **APPROVE** | 全部为 MEDIUM / LOW 问题 | 可合入，建议后续跟进 |
+
+**变更行过滤规则：**
+- CRITICAL / HIGH：全文件扫描，所有匹配均报告
+- MEDIUM / LOW：仅报告出现在本次 `git diff` 变更行内的问题，未改动代码的 MEDIUM/LOW 不输出（减少噪音）
+
+---
+
+### 报告文件
+
+每次运行自动保存 Markdown 报告：
+
+```
+<project_root>/../flutter-review-reports/review_YYYYMMDD_HHMMSS.md
+```
+
+报告包含：Flutter Analyze 原始输出、各维度问题列表、测试结果、Verdict 汇总。
 
 ---
 
