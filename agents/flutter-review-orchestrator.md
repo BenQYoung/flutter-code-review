@@ -91,12 +91,53 @@ echo "=== [I1] 硬编码字符串 Text ==="
 grep -rn "Text('" "$ROOT" --include="*.dart" | \
   grep -v "l10n\|AppLocalizations\|tr(\|//\|test"
 
+echo "=== [D2] Bang 操作符滥用（每文件超 5 处）==="
+grep -rln "[a-zA-Z]!" "$ROOT" --include="*.dart" | while read f; do
+  count=$(grep -c "[a-zA-Z]!" "$f" 2>/dev/null || echo 0)
+  [ "$count" -gt 5 ] && echo "$f: $count 处 bang 操作符"
+done
+
+echo "=== [D12] Dart 3 Pattern Matching 未使用（is + as 手动 cast）==="
+grep -rn " is [A-Z][a-zA-Z]* " "$ROOT" --include="*.dart" | grep -v "//\|test"
+
+echo "=== [L16] _build 私有方法返回 Widget ==="
+grep -rn "Widget _build" "$ROOT" --include="*.dart"
+
+echo "=== [P4] Opacity 用于动画 ==="
+grep -rn "Opacity(" "$ROOT" --include="*.dart" | grep -v "AnimatedOpacity\|//\|test"
+
+echo "=== [P5] IntrinsicHeight/Width 过度使用 ==="
+grep -rn "IntrinsicHeight\|IntrinsicWidth" "$ROOT" --include="*.dart"
+
+echo "=== [R1] SafeArea 缺失（Scaffold 页面检查）==="
+grep -rln "Scaffold(" "$ROOT" --include="*.dart" | \
+  xargs grep -rL "SafeArea" 2>/dev/null | grep "screen\|page"
+
+echo "=== [S9] 用户输入未验证 ==="
+grep -rn "controller\.text\b" "$ROOT" --include="*.dart" | \
+  grep -v "validator\|validate\|isEmpty\|trim\|//\|test"
+
+echo "=== [S10] Deep link URL 未校验 ==="
+grep -rn "pathParameters\|queryParameters" "$ROOT" --include="*.dart" | \
+  grep -v "validate\|sanitize\|//\|test"
+
+echo "=== [C9] State 类缺少 == / hashCode ==="
+grep -rn "class.*State\b" "$ROOT" --include="*.dart" | \
+  grep -v "//\|abstract\|StatefulWidget\|StatelessWidget" | while read line; do
+  file=$(echo "$line" | cut -d: -f1)
+  grep -q "operator ==" "$file" || grep -q "Equatable\|@freezed" "$file" || \
+    echo "$file: State 类未实现 == (需 Equatable / freezed / 手动实现)"
+done
+
 echo "=== [缺失测试] lib 文件无对应 _test.dart ==="
 find "$ROOT" -name "*.dart" ! -name "*_test.dart" | while read f; do
   tf="${f/lib\//test/}"
   tf="${tf%.dart}_test.dart"
   [ ! -f "$tf" ] && echo "MISSING: $f"
 done
+
+echo "=== [T6] 集成测试目录 ==="
+ls integration_test/ 2>/dev/null || echo "NO_INTEGRATION_TESTS"
 
 echo "=== flutter test ==="
 flutter test --no-pub 2>&1 | tail -20

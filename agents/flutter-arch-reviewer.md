@@ -1,6 +1,6 @@
 ---
 name: flutter-arch-reviewer
-description: 检查 Flutter Feature-First 架构合规性：目录结构、状态管理（Riverpod/BLoC/GetX/MobX 多框架）、Repository 模式、依赖包质量、barrel export、跨 feature import、静态分析。由 flutter-review-orchestrator 调用。
+description: 检查 Flutter 架构合规性：Feature-First 目录、状态管理（Riverpod/BLoC/GetX/MobX/Signals 多框架）、Repository 模式、DI 规范、路由、错误处理架构、依赖包质量、Monorepo、跨 feature import。由 flutter-review-orchestrator 调用。
 tools: Read, Grep, Glob, Bash
 ---
 
@@ -35,6 +35,14 @@ features/<name>/
 不允许 `features/A/` 直接 import `features/B/presentation/` 内部文件，只能通过 B 的 barrel export 或 domain 层。
 检测：`grep -r "import.*features/[^/]*/[^/]*/presentation/" lib/features/`
 
+### A5. 平台特定代码隔离 [MEDIUM]
+平台相关代码（Platform channel、dart:io）应封装在抽象后面，不直接散布在 business logic 或 widget 层。
+检测：`grep -rn "import 'dart:io'\|Platform\." lib/features/ --include="*.dart" | grep -v "data/\|core/"`
+
+### A6. Monorepo：跨包私有 import [HIGH]（仅 melos/workspace 项目）
+不得 import 其他内部包的 `src/` 路径，只能通过包的公开 API。
+检测：`grep -rn "import 'package:[a-z_]*/src/" lib/ --include="*.dart"`
+
 ---
 
 ## 二、Repository 模式
@@ -64,19 +72,21 @@ grep -r "flutter_bloc\|riverpod\|provider\|get:\|mobx\|signals" pubspec.yaml
 
 ### C1. 状态不可变性 [HIGH]
 - **Riverpod/BLoC**：state 更新必须用 `state = state.copyWith(...)` 或新对象，不能直接修改字段。
-- **MobX**：状态变更只能通过 `@action` 方法。
+- **MobX**：状态变更只能通过 `@action` 方法，直接字段赋值绕过变更追踪。
 - **GetX**：`.obs` 变量通过 `.value =` 赋值，不直接修改内部字段。
+- **Signals**：状态变更通过 `.value =` 或 update()，直接 mutation 绕过追踪。
 检测：`grep -n "state\.[a-z]* =" lib/features/*/providers/*.dart` 排除 `state =` 开头的正确赋值。
 
 ### C2. 状态形状——禁止布尔标志组合 [HIGH]
-用 `isLoading + hasError + data` 组合表示异步状态，会产生不可能状态。应使用：
+用 `isLoading + hasError + data` 组合表示异步状态，会产生不可能状态（isLoading && hasError 同时为 true）。应使用：
 - Riverpod：`AsyncValue`
 - BLoC：sealed class / union
 - GetX/MobX：enum status + nullable data
-检测：`grep -n "bool isLoading\|bool hasError\|bool isSuccess" lib/features/*/` 同一类中出现多个标记。
+- Signals：计算型 signal 或 enum
+检测：`grep -n "bool isLoading\|bool hasError\|bool isSuccess\|bool isFetching" lib/features/*/` 同一类中出现多个标记。
 
 ### C3. 所有 UI 分支穷举处理 [MEDIUM]
-状态消费处（`when`/`switch`/`BlocBuilder`）必须处理 loading、data、error 三种情况，不能有漏掉的分支。
+状态消费处（`when`/`switch`/`BlocBuilder`/`Observer`/`Obx`）必须处理 loading、data、error 三种情况，不能有漏掉的分支。
 检测：`grep -n "\.when(" lib/` 检查是否有 `data:`、`loading:`、`error:` 三个回调。
 
 ### C4. 状态管理器单一职责 [MEDIUM]
@@ -84,37 +94,71 @@ grep -r "flutter_bloc\|riverpod\|provider\|get:\|mobx\|signals" pubspec.yaml
 检测：文件行数 > 300 行的 provider/bloc 文件标记为 MEDIUM 警告。
 
 ### C5. 依赖注入而非内部构造 [HIGH]
-状态管理器内部不能 `DioClient()` 或 `Repository()` 直接 new，应通过构造函数参数或 Provider ref 注入。
+状态管理器内部不能 `DioClient()` 或 `Repository()` 直接 new，应通过构造函数参数或 Provider ref 注入。类在层边界应依赖抽象（接口）而非具体实现。
 检测：`grep -n "= DioClient()\|= .*Repository()" lib/features/*/providers/ lib/features/*/bloc/`
 
 ### C6. 订阅/Dispose 配对 [HIGH]
-`.listen()` 的 `StreamSubscription` 必须在 `dispose()`/`close()` 中 cancel。Timer、AnimationController 同理。
-检测：计算文件内 `.listen(` 和 `.cancel()` 的数量是否匹配。
+`.listen()` 的 `StreamSubscription` 必须在 `dispose()`/`close()` 中 cancel。Timer、AnimationController 同理。MobX 的 `ReactionDisposer`、Signals 的 effect cleanup 也必须在 dispose 中执行。
+检测：计算文件内 `.listen(` 和 `.cancel()` 的数量是否匹配；`grep -n "ReactionDisposer\|_dispose" lib/`
 
 ### C7. BLoC 跨域依赖（仅 BLoC 项目）[MEDIUM]
 BLoC 不应直接依赖另一个 BLoC，应通过共享 Repository 或 presentation 层协调。
 检测：`grep -rn "BlocProvider.of\|context.read<.*Bloc>" lib/features/*/bloc/`
 
+### C8. Riverpod：ref.watch 链条合理性（仅 Riverpod 项目）[MEDIUM]
+Riverpod 中 provider 依赖其他 provider 通过 `ref.watch` 是预期行为，只需标记循环依赖或过于复杂的依赖链。
+检测：读取 providers/ 下文件，找 ref.watch 调用链是否构成循环。
+
+### C9. 状态 == / hashCode 实现（Riverpod/BLoC 不可变状态）[HIGH]
+不可变状态类必须正确实现 `==` 和 `hashCode`（所有字段参与比较），否则框架无法检测状态变化。可通过 Equatable、freezed 或手动实现。
+检测：读取 state 类文件，检查是否有 `@override bool operator ==`、`extends Equatable`、或 `@freezed` 注解。
+
+### C10. MobX computed 派生状态 [MEDIUM]（仅 MobX 项目）
+可以从其他 observable 计算出的值应用 `@computed`，不能冗余存储并手动同步。
+检测：`grep -n "@observable\b" lib/` 检查是否有可合并为 computed 的重复 observable。
+
 ---
 
-## 四、依赖包审查
+## 四、依赖注入规范
+
+### D1. 接口依赖而非实现 [HIGH]
+跨层边界的依赖必须针对抽象（abstract class / interface），不针对具体实现。
+检测：检查 presentation/providers 层 import 路径，是否直接 import data 层实现类（而非 domain 层接口）。
+
+### D2. DI 图无循环依赖 [HIGH]
+检查 Provider/Riverpod ref、GetIt 注册是否存在循环依赖（A 依赖 B，B 依赖 A）。
+检测：静态分析 import 图，标记明显的循环。
+
+### D3. 环境特定 binding 用配置而非 if 判断 [MEDIUM]
+dev/staging/prod 差异通过编译时配置（`--dart-define`）或 DI 绑定切换，不用 `if (kDebugMode)` 散布在业务逻辑中。
+检测：`grep -rn "kDebugMode\|kReleaseMode" lib/features/ --include="*.dart" | grep -v "//"`
+
+---
+
+## 五、依赖包审查
 
 ### P1. pubspec.yaml 版本约束 [MEDIUM]
 仅当 `pubspec.yaml` 在变更列表中：
 - 锁死版本（`1.2.3` 非 `^1.2.3`）标记 MEDIUM
-- `dependency_overrides` 出现标记 HIGH（只能临时使用）
+- `dependency_overrides` 出现标记 HIGH（只能临时使用，需附上 issue 链接注释）
 
 ### P2. dev_dependencies 混入 dependencies [HIGH]
-测试/代码生成包（`flutter_test`、`build_runner`、`mockito` 等）出现在 `dependencies` 而非 `dev_dependencies`。
+测试/代码生成包（`flutter_test`、`build_runner`、`mockito`、`mocktail` 等）出现在 `dependencies` 而非 `dev_dependencies`。
 检测：读取 `pubspec.yaml`，检查 dependencies 块是否含测试相关包。
 
 ### P3. 未使用依赖（启发式）[LOW]
 `pubspec.yaml` 中声明的包在 `lib/` 下没有对应 `import`。
 检测：提取 dependencies 包名，`grep -r "import.*<package_name>" lib/` 验证是否被使用。
 
+### P4. pub.dev 包质量评估 [MEDIUM]
+仅当 `pubspec.yaml` 新增依赖时：
+- 检查包是否有 verified publisher
+- 包超过 1 年未更新标记 LOW 风险
+- 存在 dependency_overrides 且无注释说明标记 HIGH
+
 ---
 
-## 五、导航与路由
+## 六、导航与路由
 
 ### N1. 混用命令式与声明式路由 [HIGH]
 同一项目既用 `Navigator.push` 又用 GoRouter/auto_route 的声明式路由，应统一。
@@ -122,15 +166,23 @@ BLoC 不应直接依赖另一个 BLoC，应通过共享 Repository 或 presentat
 
 ### N2. 路由路径硬编码 [MEDIUM]
 路由路径写成裸字符串 `context.go('/bill/detail')` 而非常量/枚举。
-检测：`grep -rn "context\.go('\|context\.push('" lib/ | grep -v "AppRoutes\|Routes\."  `
+检测：`grep -rn "context\.go('\|context\.push('" lib/ | grep -v "AppRoutes\|Routes\."`
 
 ### N3. async gap 后使用 context [CRITICAL]
 `await` 之后使用 `context.` 前未检查 `context.mounted`（Flutter 3.7+）。
 检测：读取文件，找 async 函数中 await 后紧跟的 `context.` 使用。
 
+### N4. Deep link URL 未校验直接导航 [HIGH]
+处理 deep link 的 handler 直接使用外部 URL 参数导航，未做校验和 sanitize。
+检测：`grep -rn "onGenerateRoute\|GoRouter\|onDeepLink" lib/ --include="*.dart"` 结合路由 handler 是否有输入验证。
+
+### N5. 缺少 Auth Guard / 路由保护 [HIGH]
+受保护路由未配置 redirect 或 guard，用户未登录可直接访问。
+检测：读取 router 配置文件，检查受保护路由（/profile、/settings 等）是否有 redirect 逻辑。
+
 ---
 
-## 六、错误处理架构
+## 七、错误处理架构
 
 ### E1. 缺少全局错误捕获 [MEDIUM]
 `main.dart` 未设置 `FlutterError.onError` 和 `PlatformDispatcher.instance.onError`。
@@ -143,6 +195,18 @@ UI 层直接用 `e.toString()` 或 `error.message` 显示 API 异常，应映射
 ### E3. 空 catch 块 [CRITICAL]
 `catch (e) {}` 空块，完全吞掉错误。
 检测：`grep -n "catch.*{}" <file>` 或 `catch` 后紧跟 `}` 的模式。
+
+### E4. 缺少错误上报服务集成 [MEDIUM]
+项目未接入 Firebase Crashlytics、Sentry 或等效服务，非 fatal 错误无法追踪。
+检测：`grep -rn "FirebaseCrashlytics\|Sentry\|BugSnag" lib/ pubspec.yaml --include="*.dart"` 若无则标记。
+
+### E5. 状态管理 Observer 未接入错误上报 [MEDIUM]
+BlocObserver / ProviderObserver 存在但未将 onError 接入错误上报服务。
+检测：`grep -rn "BlocObserver\|ProviderObserver" lib/ --include="*.dart"` 检查 onError 实现。
+
+### E6. 生产环境 ErrorWidget 未定制 [LOW]
+`ErrorWidget.builder` 未在 main 中覆盖，release 模式下出错仍显示红屏。
+检测：`grep -rn "ErrorWidget.builder" lib/main.dart`
 
 ---
 

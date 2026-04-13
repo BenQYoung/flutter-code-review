@@ -158,34 +158,57 @@ flutter analyze --no-fatal-infos 2>&1 | head -100
 **架构检测（对应 flutter-arch-reviewer 规则）：**
 - Feature-First 目录结构：检查文件路径是否在 `lib/features/<feature>/data|domain|presentation/` 下
 - Repository 模式：检查 Provider/Notifier/BLoC 是否直接 import DioClient 或 http 包
-- 状态不可变性：检查 State 类中有无直接字段赋值（`state.xxx =`）
-- 布尔标志反模式：检查 `bool isLoading`/`bool hasError` 组合
+- 状态不可变性：检查 State 类中有无直接字段赋值（`state.xxx =`）；MobX 检查 @action 之外的赋值
+- 布尔标志反模式：检查 `bool isLoading`/`bool hasError` 组合，应用 AsyncValue/sealed class
 - 路由规范：检查 `Navigator.push` 与 GoRouter 混用
 - 跨 feature import：检查 `import 'package:.*/features/<other_feature>/.*'`
+- State 类 == / hashCode：Riverpod/BLoC 不可变状态类是否实现（Equatable / freezed / 手动）
+- DI 规范：Provider 层不直接 new 依赖实现类
+- Deep link URL 校验：pathParameters/queryParameters 使用前是否有验证
+- Auth guard：受保护路由是否有 redirect 逻辑
+- 全局错误捕获：main.dart 是否有 FlutterError.onError 和 PlatformDispatcher.instance.onError
+- 错误上报集成：是否接入 Crashlytics/Sentry
 
 **Lint / Dart 语言检测（对应 flutter-lint-reviewer 规则）：**
 - `[L4]` async 函数后使用 context/setState 前未检查 mounted（CRITICAL）
-- `[D1]` 隐式 dynamic（`var x = ...` 推断为 dynamic）
-- `[D3]` 空 catch 或过宽 catch
-- `[D5]` 无意义 async（函数标记 async 但无 await）
-- `[L1]` build() 超过 60 行
+- `[D1]` 隐式 dynamic
+- `[D2]` Bang 操作符滥用（超过 5 处）
+- `[D3]` 空 catch 或过宽 catch；捕获 Error 类型
+- `[D4]` 无意义 async（函数标记 async 但无 await）
+- `[D12]` 未使用 Dart 3 Pattern Matching（is + as 手动 cast）
+- `[D13]` 单次 DTO 可改用 Dart 3 Records
+- `[D14]` const 类中有 mutable 字段
+- `[L1]` build() 超过 80 行，且应拆为 Widget 类而非私有方法
 - `[L2]` 硬编码颜色/间距（Color(0x...)、Colors.*、数字间距）
 - `[L6]` shrinkWrap: true 嵌套 ListView
-- `[L8]` print 语句
+- `[L8]` print 语句（应用 dart:developer log）
 - `[L10]` WillPopScope 废弃
+- `[L16]` `_buildXxx()` 私有方法返回 Widget（应提为独立 Widget 类）
+- `[L18]` TextStyle 硬编码不走 Theme
+- `[P1]` build() 内 sort/filter/RegExp 耗时计算
+- `[P4]` Opacity 用于动画（应用 AnimatedOpacity/FadeTransition）
+- `[P5]` IntrinsicHeight/IntrinsicWidth 在列表中滥用
+- `[R1]` Scaffold 页面缺少 SafeArea
+- `[R3]` 无界容器内 Text 无溢出保护
+- `[R6]` TextStyle fontSize 硬编码不响应系统字体大小
 - `[A1]` IconButton/GestureDetector 缺少 Semantics/tooltip
-- `[I1]` Text('...') 硬编码中文字符串
+- `[I1]` Text('...') 硬编码用户可见字符串
 
 **安全检测（对应 flutter-security-reviewer 规则）：**
-- `[S1]` 硬编码 apiKey/secret/password/token 赋值
+- `[S1]` 硬编码 apiKey/secret/password/token 赋值（应用 --dart-define 或安全存储）
 - `[S2]` Hive 存储 token/password（应用 FlutterSecureStorage）
-- `[S3]` print 输出包含 token/password/secret
+- `[S3]` print 输出包含 token/password/secret/credential
 - `[S5]` 非 localhost 的 `http://` 请求
-- `[S6]` URL 参数含 token（`?token=`）
-- `[S7]` SSL 校验禁用（`badCertificateCallback`）
+- `[S6]` URL 参数含 token/password（`?token=`）
+- `[S7]` SSL 校验禁用（`badCertificateCallback` 返回 true）
+- `[S9]` 用户输入未经 validator 直接传给 API
+- `[S10]` Deep link URL 参数未校验直接用于导航
 
 **测试检测（对应 flutter-test-reviewer 规则）：**
 - 检查变更文件是否有对应 `_test.dart`
+- 检查测试文件是否覆盖 loading→success、loading→error、retry 三种状态转移
+- 检查测试文件顶层是否有共享可变状态（违反测试隔离）
+- 检查是否有 `Future.delayed`/`sleep` 导致 flaky 测试
 - 运行 `flutter test --no-pub 2>&1 | tail -20`
 - 统计通过/失败数量
 
